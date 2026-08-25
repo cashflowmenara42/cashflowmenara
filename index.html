@@ -8894,6 +8894,11 @@ function rbac_renderUserMgmt(searchTerm, deptFilter){
       <th>Nama</th><th>Username</th><th>Departemen</th><th>Role</th><th>Jabatan</th><th>Status</th><th>Last Login</th><th>Aksi</th>
     </tr></thead><tbody>`;
     users.forEach(u=>{
+      // ADDITIVE — tombol Hapus (permanen) hanya untuk Super Admin, dan
+      // TIDAK PERNAH muncul untuk user dengan role Super Admin (pengecualian
+      // keamanan: akun Super Admin manapun tidak bisa dihapus lewat UI ini).
+      const uRoleLevel = (rbac_getList(RBAC_LS_ROLES).find(r=>r.id===u.role_id) || {}).level;
+      const canDelete = isSuper && uRoleLevel !== 'super_admin';
       html += `<tr>
         <td>${escapeHtml(u.name)}</td>
         <td>${escapeHtml(u.username)}</td>
@@ -8907,6 +8912,7 @@ function rbac_renderUserMgmt(searchTerm, deptFilter){
           <button class="rbac-btn rbac-btn-outline rbac-btn-sm" data-act="loginhist" data-id="${u.id}">Riwayat Login</button>
           <button class="rbac-btn rbac-btn-outline rbac-btn-sm" data-act="reset" data-id="${u.id}">Reset Pass</button>
           <button class="rbac-btn ${u.status==='active'?'rbac-btn-danger':'rbac-btn-primary'} rbac-btn-sm" data-act="toggle" data-id="${u.id}">${u.status==='active'?'Nonaktifkan':'Aktifkan'}</button>
+          ${canDelete ? `<button class="rbac-btn rbac-btn-danger rbac-btn-sm" data-act="delete" data-id="${u.id}">Hapus</button>` : ''}
         </div></td>
       </tr>`;
     });
@@ -8931,8 +8937,59 @@ function rbac_renderUserMgmt(searchTerm, deptFilter){
       else if(act==='loginhist') rbac_openLoginHistoryModal(id);
       else if(act==='reset') rbac_openResetPasswordModal(id);
       else if(act==='toggle') rbac_toggleUserStatus(id);
+      else if(act==='delete') rbac_confirmDeleteUser(id);
     });
   });
+}
+
+// ===== ADDITIVE ONLY — Hapus User permanen (Super Admin only) =====
+// Tidak mengubah rbac_toggleUserStatus atau fungsi lain manapun.
+// Proteksi: hanya Super Admin yang bisa memanggil ini (tombolnya saja
+// sudah disembunyikan untuk role lain, tapi dicek ulang di sini juga
+// sebagai lapisan kedua), dan user dengan role Super Admin tidak akan
+// pernah bisa dihapus lewat jalur ini.
+function rbac_confirmDeleteUser(id){
+  const role = rbac_currentRole();
+  if(!role || role.level!=='super_admin'){
+    alert('Hanya Super Admin yang dapat menghapus user.'); return;
+  }
+  const users = rbac_getList(RBAC_LS_USERS);
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  const uRoleLevel = (rbac_getList(RBAC_LS_ROLES).find(r=>r.id===u.role_id) || {}).level;
+  if(uRoleLevel==='super_admin'){
+    alert('Akun dengan role Super Admin tidak dapat dihapus.'); return;
+  }
+  const body = document.getElementById('rbacModalBody');
+  body.innerHTML = `
+    <div class="rbac-form-title">Hapus User Permanen</div>
+    <div style="font-size:13px;color:#333;margin:10px 0;">
+      Yakin ingin menghapus <b>${escapeHtml(u.name)}</b> (${escapeHtml(u.username)}) secara permanen?
+      Aksi ini <b>tidak bisa dibatalkan</b>.
+    </div>
+    <div class="rbac-form-actions" style="margin-top:10px;">
+      <button class="rbac-btn rbac-btn-outline" id="rbacDeleteCancelBtn" style="flex:1;">Batal</button>
+      <button class="rbac-btn rbac-btn-danger" id="rbacDeleteConfirmBtn" style="flex:1;">Hapus Permanen</button>
+    </div>`;
+  document.getElementById('rbacModalOverlay').classList.add('show');
+  document.getElementById('rbacDeleteCancelBtn').addEventListener('click', rbac_closeModal);
+  document.getElementById('rbacDeleteConfirmBtn').addEventListener('click', function(){
+    rbac_deleteUser(id);
+    rbac_closeModal();
+  });
+}
+function rbac_deleteUser(id){
+  const role = rbac_currentRole();
+  if(!role || role.level!=='super_admin') return;
+  let users = rbac_getList(RBAC_LS_USERS);
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  const uRoleLevel = (rbac_getList(RBAC_LS_ROLES).find(r=>r.id===u.role_id) || {}).level;
+  if(uRoleLevel==='super_admin') return;
+  users = users.filter(x=>x.id!==id);
+  rbac_saveList(RBAC_LS_USERS, users);
+  rbac_logActivity('Hapus User: ' + u.username, { before: JSON.stringify({name:u.name, username:u.username, status:u.status}), after: 'DIHAPUS' }, 'success');
+  rbac_renderUserMgmt(document.getElementById('rbacUserSearch').value, document.getElementById('rbacUserDeptFilter').value);
 }
 
 // ===== ADDITIVE ONLY — Riwayat Login per user =====
